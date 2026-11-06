@@ -55,6 +55,7 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   build-RustDeskTempTopMostWindow:
+    if: ${{ inputs.target == 'windows' || inputs.target == 'both' }}
     uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
     strategy:
       fail-fast: false
@@ -72,6 +73,7 @@ jobs:
       target_version: Windows10
 
   build-for-windows-flutter:
+    if: ${{ inputs.target == 'windows' || inputs.target == 'both' }}
     name: ${{ matrix.job.target }}
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
     runs-on: ${{ matrix.job.os }}
@@ -481,6 +483,7 @@ jobs:
           if-no-files-found: error
 
   build-rustdesk-android:
+    if: ${{ inputs.target == 'android' || inputs.target == 'both' }}
     needs: [generate-bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -690,7 +693,7 @@ jobs:
   build-rustdesk-android-universal:
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
-    if: ${{ inputs.upload-artifact }}
+    if: ${{ inputs.upload-artifact && (inputs.target == 'android' || inputs.target == 'both') }}
     runs-on: ubuntu-24.04
     env:
       reltype: release
