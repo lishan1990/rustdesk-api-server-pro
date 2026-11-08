@@ -2516,16 +2516,31 @@ fn apply_embedded_custom_config(text: &str) {
             }
             continue;
         }
-        if keys::KEYS_BUILDIN_SETTINGS.iter().any(|k| *k == key) {
+        // 与官方 signed custom.txt 一致：写入 OVERWRITE_* / BUILTIN 设置，
+        // 否则 Config::get_option 读不到（HARD_SETTINGS 只用于密码等少数项）
+        let k2 = key.replace('_', "-");
+        let k1 = k2.replace('-', "_");
+        for kk in [k1, k2] {
+            config::OVERWRITE_DISPLAY_SETTINGS
+                .write()
+                .unwrap()
+                .insert(kk.clone(), value.to_owned());
+            config::OVERWRITE_LOCAL_SETTINGS
+                .write()
+                .unwrap()
+                .insert(kk.clone(), value.to_owned());
+            config::OVERWRITE_SETTINGS
+                .write()
+                .unwrap()
+                .insert(kk.clone(), value.to_owned());
             config::BUILTIN_SETTINGS
                 .write()
                 .unwrap()
-                .insert(key.to_owned(), value.to_owned());
-        } else {
+                .insert(kk.clone(), value.to_owned());
             config::HARD_SETTINGS
                 .write()
                 .unwrap()
-                .insert(key.to_owned(), value.to_owned());
+                .insert(kk, value.to_owned());
         }
     }
 }
