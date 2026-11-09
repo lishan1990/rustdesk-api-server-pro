@@ -38,19 +38,28 @@ use hbb_common::{sysinfo::Pid, ResultType};
 use std::sync::{Arc, Mutex};
 
 // Restrict names because installers interpolate them into privileged scripts and paths.
+// Windows accepts Unicode (e.g. Chinese brand names) in service names, registry keys and
+// paths, and the installer script switches to UTF-8 (chcp 65001) before running, so custom
+// brands may use non-ASCII letters/digits there. macOS keeps the strict ASCII rule because
+// pgrep interprets a leading hyphen as an option. Shell metacharacters, spaces, dots and
+// path separators are still rejected on every platform.
 #[cfg(any(windows, target_os = "macos"))]
 fn validate_install_app_name(app_name: &str) -> ResultType<()> {
-    let mut bytes = app_name.bytes();
-    let Some(first) = bytes.next() else {
+    let valid_char = |c: char| {
+        c == '-' || c == '_' || c.is_ascii_alphanumeric()
+            || (cfg!(windows) && c.is_alphanumeric())
+    };
+    let mut chars = app_name.chars();
+    let Some(first) = chars.next() else {
         hbb_common::bail!("Application name must not be empty.");
     };
-    // Keep leading hyphens valid on Windows for existing custom clients. macOS
-    // rejects them because pgrep interprets a leading hyphen as an option.
-    let valid_first =
-        first.is_ascii_alphanumeric() || first == b'_' || (cfg!(windows) && first == b'-');
-    if !valid_first
-        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
+    // Keep leading hyphens valid on Windows for existing custom clients.
+    let valid_first = if cfg!(windows) {
+        valid_char(first)
+    } else {
+        first.is_ascii_alphanumeric() || first == '_'
+    };
+    if !valid_first || !chars.all(|c| valid_char(c)) {
         let valid_prefix = if cfg!(windows) {
             "a letter, number, underscore, or hyphen"
         } else {
@@ -244,7 +253,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_app_names_enforce_ascii_command_safety() {
+    fn install_app_names_enforce_command_safety() {
         for app_name in [
             "RustDesk",
             "RustDesk-2",
@@ -256,13 +265,21 @@ mod tests {
         ] {
             assert!(validate_install_app_name(app_name).is_ok(), "{app_name}");
         }
-        for app_name in ["", "Rust.Desk", "Rust Desk", "RüstDesk", "RustDesk;touch"] {
+        for app_name in ["", "Rust.Desk", "Rust Desk", "RustDesk;touch", "Rust/Desk"] {
             assert!(validate_install_app_name(app_name).is_err(), "{app_name}");
         }
 
         #[cfg(windows)]
-        assert!(validate_install_app_name("-RustDesk").is_ok());
+        {
+            assert!(validate_install_app_name("-RustDesk").is_ok());
+            assert!(validate_install_app_name("逍遥远控").is_ok());
+            assert!(validate_install_app_name("RüstDesk").is_ok());
+        }
         #[cfg(target_os = "macos")]
-        assert!(validate_install_app_name("-RustDesk").is_err());
+        {
+            assert!(validate_install_app_name("-RustDesk").is_err());
+            assert!(validate_install_app_name("逍遥远控").is_err());
+            assert!(validate_install_app_name("RüstDesk").is_err());
+        }
     }
 }
