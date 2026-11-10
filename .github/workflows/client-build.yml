@@ -119,6 +119,30 @@ jobs:
           cut -d= -f1 custom-embed.txt | grep -v '^#' | grep -v '^$'
         env:
           CUSTOM_CONFIG: ${{ secrets.CUSTOM_CONFIG }}
+      - name: Resolve ASCII install name
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+
+          def cfg(key):
+              for line in open('custom-embed.txt', encoding='utf-8'):
+                  line = line.strip()
+                  if line.startswith(key + '='):
+                      return line.split('=', 1)[1].strip()
+              return ''
+
+          # Must be identical to derive_ascii_install_name() in src/common.rs.
+          name = cfg('app-install-name') or cfg('app-name') or 'RustDesk'
+          if not name.isascii():
+              h = 0xcbf29ce484222325
+              for b in name.encode('utf-8'):
+                  h = ((h ^ b) * 0x100000001b3) & 0xffffffffffffffff
+              name = 'RD%06X' % ((h >> 32) & 0xffffff)
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('CUSTOM_APP_NAME=' + name + '\n')
+          print('ASCII install name:', name)
+          PY
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -384,9 +408,10 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
+          mv ./rustdesk/rustdesk.exe "./rustdesk/${CUSTOM_APP_NAME}.exe"
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          python3 ./generate.py -f ../../rustdesk/ -o . -e "../../rustdesk/${CUSTOM_APP_NAME}.exe"
           popd
           mkdir -p ./SignOutput
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
@@ -407,7 +432,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
           pushd ./res/msi
-          python preprocess.py --arp -d ../../rustdesk
+          python preprocess.py --arp -d ../../rustdesk --app-name "$env:CUSTOM_APP_NAME"
           nuget restore msi.sln
           $msiPlatform = if ('${{ matrix.job.arch }}' -eq 'aarch64') { 'ARM64' } else { 'x64' }
           msbuild msi.sln -p:Configuration=Release -p:Platform=$msiPlatform /p:TargetVersion=Windows10
@@ -437,7 +462,7 @@ jobs:
         run: |
           git checkout -- res/msi
           cp -r ./rustdesk ./rustdesk-msi-template
-          mv ./rustdesk-msi-template/rustdesk.exe ./rustdesk-msi-template/RDAPPNAM.exe
+          mv "./rustdesk-msi-template/${env:CUSTOM_APP_NAME}.exe" ./rustdesk-msi-template/RDAPPNAM.exe
           Set-Content -Path ./rustdesk-msi-template/custom.txt -Value 'placeholder' -NoNewline
           $assets = './rustdesk-msi-template/data/flutter_assets/assets'
           New-Item -ItemType Directory -Force -Path $assets | Out-Null
