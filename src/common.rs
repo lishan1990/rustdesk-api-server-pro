@@ -2492,7 +2492,52 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+/// A brand name may contain non-ASCII characters (e.g. a Chinese name). The app
+/// name is interpolated into privileged .bat installers, Windows service names,
+/// registry keys, URL schemes, MSI/WiX identifiers and file names. cmd.exe reads
+/// .bat files using the system ANSI code page, so non-ASCII names are garbled and
+/// the install silently fails (START returns 9059 and is_installed() stays false).
+/// Keep an ASCII install name in config::APP_NAME and expose the original brand as
+/// a display-only option so the UI can still show the customized name.
+/// RD + 6 hex digits = 8 ASCII chars, a valid WiX 8.3 identifier.
+fn derive_ascii_install_name(display: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in display.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("RD{:06X}", ((hash >> 32) & 0x00ff_ffff) as u32)
+}
+
+fn set_embedded_option(key: &str, value: &str) {
+    let k2 = key.replace('_', "-");
+    let k1 = k2.replace('-', "_");
+    for kk in [k1, k2] {
+        config::OVERWRITE_DISPLAY_SETTINGS
+            .write()
+            .unwrap()
+            .insert(kk.clone(), value.to_owned());
+        config::OVERWRITE_LOCAL_SETTINGS
+            .write()
+            .unwrap()
+            .insert(kk.clone(), value.to_owned());
+        config::OVERWRITE_SETTINGS
+            .write()
+            .unwrap()
+            .insert(kk.clone(), value.to_owned());
+        config::BUILTIN_SETTINGS
+            .write()
+            .unwrap()
+            .insert(kk.clone(), value.to_owned());
+        config::HARD_SETTINGS
+            .write()
+            .unwrap()
+            .insert(kk, value.to_owned());
+    }
+}
+
 fn apply_embedded_custom_config(text: &str) {
+    let mut entries: Vec<(String, String)> = Vec::new();
     for raw_line in text.lines() {
         let line = raw_line.trim();
         if line.is_empty()
@@ -2510,38 +2555,81 @@ fn apply_embedded_custom_config(text: &str) {
         if key.is_empty() {
             continue;
         }
+        entries.push((key.to_owned(), value.to_owned()));
+    }
+
+    // 与官方 signed custom.txt 一致：写入 OVERWRITE_* / BUILTIN 设置，
+    // 否则 Config::get_option 读不到（HARD_SETTINGS 只用于密码等少数项）
+    // Write ordinary options first so app-name handling can consult an explicitly
+    // configured app-install-name / app-display-name.
+    for (key, value) in &entries {
         if key == "app-name" {
-            if !value.is_empty() {
-                *config::APP_NAME.write().unwrap() = value.to_owned();
-            }
             continue;
         }
-        // 与官方 signed custom.txt 一致：写入 OVERWRITE_* / BUILTIN 设置，
-        // 否则 Config::get_option 读不到（HARD_SETTINGS 只用于密码等少数项）
-        let k2 = key.replace('_', "-");
-        let k1 = k2.replace('-', "_");
-        for kk in [k1, k2] {
-            config::OVERWRITE_DISPLAY_SETTINGS
-                .write()
-                .unwrap()
-                .insert(kk.clone(), value.to_owned());
-            config::OVERWRITE_LOCAL_SETTINGS
-                .write()
-                .unwrap()
-                .insert(kk.clone(), value.to_owned());
-            config::OVERWRITE_SETTINGS
-                .write()
-                .unwrap()
-                .insert(kk.clone(), value.to_owned());
-            config::BUILTIN_SETTINGS
-                .write()
-                .unwrap()
-                .insert(kk.clone(), value.to_owned());
-            config::HARD_SETTINGS
-                .write()
-                .unwrap()
-                .insert(kk, value.to_owned());
+        set_embedded_option(key, value);
+    }
+
+    let lookup = |key: &str| -> String {
+        entries
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let Some(app_name) = entries
+        .iter()
+        .find(|(k, _)| k == "app-name")
+        .map(|(_, v)| v.clone())
+    else {
+        return;
+    };
+    if app_name.is_empty() {
+        return;
+    }
+
+    let explicit_install = lookup("app-install-name");
+    let valid_install = !explicit_install.is_empty()
+        && explicit_install.is_ascii()
+        && explicit_install
+            .bytes()
+            .next()
+            .map(|b| b.is_ascii_alphabetic() || b == b'_')
+            .unwrap_or(false)
+        && explicit_install
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let install_name = if valid_install {
+        explicit_install
+    } else if app_name.is_ascii() {
+        app_name.clone()
+    } else {
+        derive_ascii_install_name(&app_name)
+    };
+
+    let display_name = {
+        let explicit = lookup("app-display-name");
+        if explicit.is_empty() {
+            app_name.clone()
+        } else {
+            explicit
         }
+    };
+
+    *config::APP_NAME.write().unwrap() = install_name.clone();
+    if display_name != install_name {
+        set_embedded_option("app-display-name", &display_name);
+    }
+}
+
+/// UI-only brand name. Never use this for paths, service names, registry keys,
+/// URL schemes or installer scripts.
+#[inline]
+pub fn get_display_name() -> String {
+    let name = get_local_option("app-display-name");
+    if name.trim().is_empty() {
+        get_app_name()
+    } else {
+        name
     }
 }
 
