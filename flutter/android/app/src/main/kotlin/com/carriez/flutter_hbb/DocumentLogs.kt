@@ -17,7 +17,12 @@ import kotlin.concurrent.withLock
 internal class DocumentLogs(private val context: Context) {
     private val resolver = context.contentResolver
     private val prefs = context.getSharedPreferences(DOCUMENT_PREFS, Context.MODE_PRIVATE)
-    private val appName = context.applicationInfo.loadLabel(context.packageManager).toString()
+    // Android 11+ scoped storage exposes only Android/media/<package name> to an app,
+    // even after the user grants the whole Android/media tree through SAF. Custom builds
+    // used the ASCII install name (e.g. RDD3FDE6) as the app label here, so
+    // DocumentsContract.createDocument() failed with "is not available as a directory"
+    // and blocked the service from starting. Always use the real package name.
+    private val appName = context.packageName
     private val appDirectoryId = "$PARENT_ID/$appName"
     private val directoryId = "$appDirectoryId/Logs"
     val directoryPath = directoryId.substringAfter(':')
@@ -108,21 +113,38 @@ internal class DocumentLogs(private val context: Context) {
         require(permissions == GRANT_FLAGS) { "Read and write access is required for logs" }
         setEnabled(false)
         resolver.takePersistableUriPermission(uri, permissions)
-        ensureDirectory(uri)
+        val created = runCatching { ensureDirectory(uri); true }.getOrDefault(false)
         closeOutput()
-        check(prefs.edit().putString(LOG_GRANT, uri.toString()).commit()) {
-            "Unable to remember the log directory"
+        if (!created) {
+            // A few ROMs still refuse to expose Android/media/<package> through SAF.
+            // Fall back to app-private logs instead of raising an error dialog that
+            // would prevent the main service from starting.
+            prefs.edit().remove(LOG_GRANT).putBoolean(LOG_FALLBACK, true).commit()
+        } else {
+            check(prefs.edit().putString(LOG_GRANT, uri.toString()).commit()) {
+                "Unable to remember the log directory"
+            }
+            check(ensureReady()) { "Log directory access was revoked" }
         }
-        check(ensureReady()) { "Log directory access was revoked" }
     }
 
     fun ensureReady(): Boolean = lock.withLock {
+        // A previous grant could not be used on this device. Keep app-private logs
+        // and never ask for the media folder again.
+        if (prefs.getBoolean(LOG_FALLBACK, false)) {
+            setEnabled(false)
+            return true
+        }
         setEnabled(false)
         if (!hasPermission()) return false
         val uri = grant() ?: return false
         val root = DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
         if (!isDirectory(root)) return false
-        ensureDirectory(uri)
+        if (runCatching { ensureDirectory(uri) }.isFailure) {
+            prefs.edit().remove(LOG_GRANT).putBoolean(LOG_FALLBACK, true).commit()
+            setEnabled(false)
+            return true
+        }
         failure = null
         if (output == null) openNext(uri)
         setEnabled(true)
@@ -252,6 +274,7 @@ internal class DocumentLogs(private val context: Context) {
         const val AUTHORITY = "com.android.externalstorage.documents"
         const val PARENT_ID = "primary:Android/media"
         private const val LOG_GRANT = "log-folder"
+        private const val LOG_FALLBACK = "log-folder-fallback"
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         private const val MAX_LOG_BYTES = 16L * 1024 * 1024

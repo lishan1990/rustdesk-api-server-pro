@@ -846,6 +846,51 @@ jobs:
           name: librustdesk.so.i686-linux-android
           path: ./flutter/android/app/src/main/jniLibs/x86
 
+      - name: Restore reusable Android signing keystore
+        if: ${{ env.ANDROID_SIGNING_KEY == '' }}
+        uses: actions/cache@v4
+        with:
+          path: flutter/android/app/rd-release.jks
+          key: rd-android-release-keystore-v1
+
+      - name: Prepare Android release signing
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          set -e
+          export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
+          cd flutter/android
+          if [ -n "$ANDROID_SIGNING_KEY" ]; then
+            echo "$ANDROID_SIGNING_KEY" | base64 -d > app/rd-release.jks
+            ALIAS="${ANDROID_KEY_ALIAS:-rdrelease}"
+            STORE_PASS="${ANDROID_STORE_PASSWORD:-rdrelease123}"
+            KEY_PASS="${ANDROID_KEY_PASSWORD:-$STORE_PASS}"
+            echo "Using release keystore from ANDROID_SIGNING_KEY"
+          elif [ -f app/rd-release.jks ]; then
+            ALIAS="rdrelease"
+            STORE_PASS="rdrelease123"
+            KEY_PASS="rdrelease123"
+            echo "Reusing cached release keystore"
+          else
+            keytool -genkeypair -v \
+              -keystore app/rd-release.jks \
+              -alias rdrelease \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass rdrelease123 -keypass rdrelease123 \
+              -dname "CN=RustDesk Custom Client, OU=Custom, O=Custom, L=NA, ST=NA, C=CN" > /dev/null
+            ALIAS="rdrelease"
+            STORE_PASS="rdrelease123"
+            KEY_PASS="rdrelease123"
+            echo "Generated a self-signed release keystore"
+          fi
+          printf 'storeFile=rd-release.jks\nkeyAlias=%s\nkeyPassword=%s\nstorePassword=%s\n' \
+            "$ALIAS" "$KEY_PASS" "$STORE_PASS" > key.properties
+          echo "key.properties ready"
+
       - name: Build rustdesk
         shell: bash
         env:
@@ -854,8 +899,7 @@ jobs:
           export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
           # Increase Gradle JVM memory for CI builds
           sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
-          # temporary use debug sign config
-          sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
+          # Release APK is signed with the keystore prepared above (never the public debug key).
           mv ./flutter/android/app/src/main/jniLibs/arm64-v8a/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
           cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
           mv ./flutter/android/app/src/main/jniLibs/armeabi-v7a/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
@@ -872,6 +916,8 @@ jobs:
           popd
           mkdir -p signed-apk
           mv ./flutter/build/app/outputs/flutter-apk/app-${{ env.reltype }}.apk signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
+          echo "APK signer certificate:"
+          keytool -printcert -jarfile signed-apk/*.apk 2>/dev/null | grep -E "Owner:|SHA256:" | head -4 || true
 
       # https://github.com/r0adkll/sign-android-release/issues/84#issuecomment-1889636075
       - name: Upload custom client apk
