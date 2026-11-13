@@ -1,0 +1,14 @@
+name: iOS Runner Probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Print runner info
+        run: |
+          echo "RUNNER_OK"
+          uname -a
+          sw_vers
+          xcodebuild -version || true
