@@ -247,35 +247,29 @@ class Peers extends ChangeNotifier {
   }
 
   // 2026-11-13: 过滤掉本机（点本机会造成自连弹窗风暴），所有来源的列表统一生效
-  List<Peer> _filterSelf(List<Peer> list) {
-    try {
-      final myId = bind.mainGetMyId();
-      if (myId.isEmpty) return list;
-      return list.where((p) => p.id != myId).toList();
-    } catch (_) {
-      return list;
-    }
+  List<Peer> _filterSelf(List<Peer> list, String myId) {
+    if (myId.isEmpty) return list;
+    return list.where((p) => p.id != myId).toList();
   }
 
-  void _updatePeers(Map<String, dynamic> evt) {
+  Future<void> _updatePeers(Map<String, dynamic> evt) async {
+    String myId = '';
+    try {
+      myId = await bind.mainGetMyId();
+    } catch (_) {}
     final onlineStates = _getOnlineStates();
     if (getInitPeers != null) {
-      peers = _filterSelf(getInitPeers?.call() ?? []);
+      peers = _filterSelf(getInitPeers?.call() ?? [], myId);
     } else {
-      peers = _filterSelf(_decodePeers(evt['peers']));
+      peers = _filterSelf(_decodePeers(evt['peers']), myId);
     }
 
     restPeerIds = [];
     if (evt['ids'] != null) {
-      try {
-        final myId = bind.mainGetMyId();
-        restPeerIds = (evt['ids'] as String)
-            .split(',')
-            .where((id) => id != myId)
-            .toList();
-      } catch (_) {
-        restPeerIds = (evt['ids'] as String).split(',');
-      }
+      restPeerIds = (evt['ids'] as String)
+          .split(',')
+          .where((id) => id != myId)
+          .toList();
     }
 
     for (var peer in peers) {
