@@ -246,17 +246,36 @@ class Peers extends ChangeNotifier {
     }
   }
 
+  // 2026-11-13: 过滤掉本机（点本机会造成自连弹窗风暴），所有来源的列表统一生效
+  List<Peer> _filterSelf(List<Peer> list) {
+    try {
+      final myId = bind.mainGetMyId();
+      if (myId.isEmpty) return list;
+      return list.where((p) => p.id != myId).toList();
+    } catch (_) {
+      return list;
+    }
+  }
+
   void _updatePeers(Map<String, dynamic> evt) {
     final onlineStates = _getOnlineStates();
     if (getInitPeers != null) {
-      peers = getInitPeers?.call() ?? [];
+      peers = _filterSelf(getInitPeers?.call() ?? []);
     } else {
-      peers = _decodePeers(evt['peers']);
+      peers = _filterSelf(_decodePeers(evt['peers']));
     }
 
     restPeerIds = [];
     if (evt['ids'] != null) {
-      restPeerIds = (evt['ids'] as String).split(',');
+      try {
+        final myId = bind.mainGetMyId();
+        restPeerIds = (evt['ids'] as String)
+            .split(',')
+            .where((id) => id != myId)
+            .toList();
+      } catch (_) {
+        restPeerIds = (evt['ids'] as String).split(',');
+      }
     }
 
     for (var peer in peers) {
