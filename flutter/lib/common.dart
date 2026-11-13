@@ -2593,6 +2593,16 @@ connect(BuildContext context, String id,
     } catch (_) {}
   }
   id = id.replaceAll(' ', '');
+  // 2026-11-13: 禁止连接本机（自连会造成连接管理窗风暴），所有入口统一拦截
+  if (id == bind.mainGetMyId()) {
+    if (isDesktop && desktopType != DesktopType.main) return;
+    msgBoxCommon(
+        gFFI.dialogManager,
+        'Error',
+        Text('不能连接本机'),
+        [dialogButton('OK', onPressed: () => gFFI.dialogManager.dismissAll())]);
+    return;
+  }
   final oldId = id;
   id = await bind.mainHandleRelayId(id: id);
   forceRelay = id != oldId || forceRelay;
