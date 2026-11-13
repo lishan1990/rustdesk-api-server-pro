@@ -993,7 +993,20 @@ async fn handle(data: Data, stream: &mut Connection) {
                 } else if name == "hide_cm" {
                     value = if crate::hbbs_http::sync::is_pro() || crate::common::is_custom_client()
                     {
-                        Some(hbb_common::password_security::hide_cm().to_string())
+                        // 2026-11-13 custom client: 定制客户端放开上游 hide_cm() 的
+                        // 「仅固定密码验证」前置条件，使「允许临时密码连接」与
+                        // 「隐藏CM连接浮窗」可以同时生效；仅要求密码审批模式。
+                        // 官方原版客户端/Pro 行为保持不变，仍走上游完整判定。
+                        let hide = if crate::common::is_custom_client() {
+                            password::approve_mode() == password::ApproveMode::Password
+                                && config::option2bool(
+                                    "allow-hide-cm",
+                                    &Config::get_option("allow-hide-cm"),
+                                )
+                        } else {
+                            hbb_common::password_security::hide_cm()
+                        };
+                        Some(hide.to_string())
                     } else {
                         None
                     };
