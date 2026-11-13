@@ -889,7 +889,8 @@ jobs:
           fi
           printf 'storeFile=rd-release.jks\nkeyAlias=%s\nkeyPassword=%s\nstorePassword=%s\n' \
             "$ALIAS" "$KEY_PASS" "$STORE_PASS" > key.properties
-          echo "key.properties ready"
+          keytool -list -v -keystore app/rd-release.jks -storepass "$STORE_PASS" -alias "$ALIAS" > /dev/null
+          echo "key.properties ready, release keystore verified (alias=$ALIAS)"
 
       - name: Build rustdesk
         shell: bash
