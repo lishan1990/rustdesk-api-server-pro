@@ -941,6 +941,7 @@ jobs:
     name: build rustdesk ios ipa
     if: ${{ inputs.target == 'ios' || inputs.target == 'all' }}
     runs-on: macos-14
+    timeout-minutes: 180
     needs: [generate-bridge]
     steps:
       - name: Export GitHub Actions cache environment variables
@@ -1036,12 +1037,15 @@ jobs:
           p12-file-base64: ${{ secrets.IOS_P12_BASE64 }}
           p12-password: ${{ secrets.IOS_P12_PASSWORD }}
           keychain: rustdesk-ios
-          keychain-password: ${{ secrets.IOS_P12_PASSWORD }}
+          keychain-password: rustdesk-ios-keychain
 
       - name: Build rustdesk ipa
         shell: bash
         run: |
+          set -e
           pushd flutter
+          mkdir -p build/ios/ipa
+          rm -f build/ios/ipa/*.ipa
           # 有签名材料时先尝试导出已签名 ipa；未配置或导出失败时回退到未签名 .app 手工打包，
           # 保证无论有没有苹果开发者账号都能拿到可下载的 .ipa。
           if [ -n "$IOS_EXPORT_OPTIONS_PLIST_B64" ]; then
@@ -1050,13 +1054,24 @@ jobs:
             flutter build ipa --release --export-options-plist=ios/exportOptions-custom.plist
             set -e
           fi
-          if ! ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
+          if ! compgen -G "build/ios/ipa/*.ipa" > /dev/null; then
+            # flutter build ipa --no-codesign 只产生 .xcarchive，不会产出 .ipa；
+            # 因此改用 build ios 生成 Runner.app，再按标准 Payload 结构手工打包未签名 ipa。
             flutter build ios --release --no-codesign
+            APP_DIR="$(find build/ios -type d -name Runner.app -print -quit)"
+            if [ -z "$APP_DIR" ]; then
+              echo "Runner.app not found under build/ios" >&2
+              find build/ios -maxdepth 3 -type d | head -40 >&2
+              exit 1
+            fi
+            echo "using app: $APP_DIR"
+            rm -rf build/ios/ipa/Payload
             mkdir -p build/ios/ipa/Payload
-            cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+            cp -R "$APP_DIR" build/ios/ipa/Payload/
             (cd build/ios/ipa && zip -q -r -y unsigned.ipa Payload)
             rm -rf build/ios/ipa/Payload
           fi
+          ls -lh build/ios/ipa/*.ipa
           popd
 
       - name: Upload custom client ipa
