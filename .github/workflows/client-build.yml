@@ -14,6 +14,7 @@ on:
         default: false
       target:
         type: string
+        description: "构建目标：windows / android / ios / both(Windows+Android) / all(三系统 Windows+Android+iOS)"
         default: "both"
 
 env:
@@ -49,6 +50,10 @@ env:
   #signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
+  # 2026-11-13 iOS 签名材料（可选）：不配置时产出未签名 .ipa
+  IOS_P12_BASE64: "${{ secrets.IOS_P12_BASE64 }}"
+  IOS_P12_PASSWORD: "${{ secrets.IOS_P12_PASSWORD }}"
+  IOS_EXPORT_OPTIONS_PLIST_B64: "${{ secrets.IOS_EXPORT_OPTIONS_PLIST_B64 }}"
   UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
   PUBLISH_UPDATE_METADATA: "${{ inputs.publish-update-metadata }}"
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
@@ -58,7 +63,7 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   build-RustDeskTempTopMostWindow:
-    if: ${{ inputs.target == 'windows' || inputs.target == 'both' }}
+    if: ${{ inputs.target == 'windows' || inputs.target == 'both' || inputs.target == 'all' }}
     uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
     strategy:
       fail-fast: false
@@ -76,7 +81,7 @@ jobs:
       target_version: Windows10
 
   build-for-windows-flutter:
-    if: ${{ inputs.target == 'windows' || inputs.target == 'both' }}
+    if: ${{ inputs.target == 'windows' || inputs.target == 'both' || inputs.target == 'all' }}
     name: ${{ matrix.job.target }}
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
     runs-on: ${{ matrix.job.os }}
@@ -511,7 +516,7 @@ jobs:
           if-no-files-found: error
 
   build-rustdesk-android:
-    if: ${{ inputs.target == 'android' || inputs.target == 'both' }}
+    if: ${{ inputs.target == 'android' || inputs.target == 'both' || inputs.target == 'all' }}
     needs: [generate-bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -721,7 +726,7 @@ jobs:
   build-rustdesk-android-universal:
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
-    if: ${{ inputs.upload-artifact && (inputs.target == 'android' || inputs.target == 'both') }}
+    if: ${{ inputs.upload-artifact && (inputs.target == 'android' || inputs.target == 'both' || inputs.target == 'all') }}
     runs-on: ubuntu-24.04
     env:
       reltype: release
@@ -875,4 +880,142 @@ jobs:
         with:
           name: rd-client-android-universal
           path: signed-apk/*.apk
+          if-no-files-found: error
+
+
+  # ============================================================
+  # 2026-11-13 新增：定制 iOS 客户端构建
+  # 参考官方 flutter-build.yml 的 build-rustdesk-ios，额外写入 CUSTOM_CONFIG 内嵌配置，
+  # 并把产物上传为 rd-client-ios-arm64 供面板下载。
+  # 未配置苹果签名材料时产出「未签名 .ipa」，可用 AltStore / Sideloadly / 企业证书重签安装；
+  # 配置 IOS_P12_BASE64 / IOS_P12_PASSWORD / IOS_EXPORT_OPTIONS_PLIST_B64 后产出已签名 .ipa。
+  # ============================================================
+  build-rustdesk-ios:
+    name: build rustdesk ios ipa
+    if: ${{ inputs.target == 'ios' || inputs.target == 'all' }}
+    runs-on: macos-14
+    needs: [generate-bridge]
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install dependencies
+        run: |
+          brew install nasm yasm
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Write embedded custom config
+        shell: bash
+        run: |
+          if [ -z "${CUSTOM_CONFIG//[[:space:]]/}" ]; then
+            echo "secret CUSTOM_CONFIG is empty" >&2
+            exit 1
+          fi
+          printf '%s' "$CUSTOM_CONFIG" > custom-embed.txt
+          echo "embedded config keys:"
+          cut -d= -f1 custom-embed.txt | grep -v '^#' | grep -v '^$'
+        env:
+          CUSTOM_CONFIG: ${{ secrets.CUSTOM_CONFIG }}
+
+      - name: Install flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Patch flutter
+        run: |
+          cd $(dirname $(dirname $(which flutter)))
+          if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+            git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+          fi
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        run: |
+          if ! $VCPKG_ROOT/vcpkg install --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-arm64-ios-rel-out.log" || true
+        shell: bash
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-apple-ios
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: rustdesk-lib-cache-ios
+          key: aarch64-apple-ios
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Build rustdesk lib
+        run: |
+          rustup target add aarch64-apple-ios
+          cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
+
+      - name: Import iOS signing certificate (optional)
+        if: env.IOS_P12_BASE64 != ''
+        uses: apple-actions/import-codesign-certs@253ddeeac23f2bdad1646faac5c8c2832e800071 # v1
+        with:
+          p12-file-base64: ${{ secrets.IOS_P12_BASE64 }}
+          p12-password: ${{ secrets.IOS_P12_PASSWORD }}
+          keychain: rustdesk-ios
+          keychain-password: ${{ secrets.IOS_P12_PASSWORD }}
+
+      - name: Build rustdesk ipa
+        shell: bash
+        run: |
+          pushd flutter
+          # 有签名材料时先尝试导出已签名 ipa；未配置或导出失败时回退到未签名 .app 手工打包，
+          # 保证无论有没有苹果开发者账号都能拿到可下载的 .ipa。
+          if [ -n "$IOS_EXPORT_OPTIONS_PLIST_B64" ]; then
+            echo "$IOS_EXPORT_OPTIONS_PLIST_B64" | base64 --decode > ios/exportOptions-custom.plist
+            set +e
+            flutter build ipa --release --export-options-plist=ios/exportOptions-custom.plist
+            set -e
+          fi
+          if ! ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
+            flutter build ios --release --no-codesign
+            mkdir -p build/ios/ipa/Payload
+            cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+            (cd build/ios/ipa && zip -q -r -y unsigned.ipa Payload)
+            rm -rf build/ios/ipa/Payload
+          fi
+          popd
+
+      - name: Upload custom client ipa
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rd-client-ios-arm64
+          path: flutter/build/ios/ipa/*.ipa
           if-no-files-found: error
