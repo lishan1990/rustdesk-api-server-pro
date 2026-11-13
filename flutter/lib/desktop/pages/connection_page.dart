@@ -205,6 +205,12 @@ class _ConnectionPageState extends State<ConnectionPage>
   final FocusNode _idFocusNode = FocusNode();
   final TextEditingController _idEditingController = TextEditingController();
 
+  // 2026-11-13: 自定义选项「允许使用临时密码连接」——控制端连接页增加临时密码输入框
+  static const _kOptionAllowTempPassword = 'allow-temp-password';
+  final TextEditingController _pwdEditingController = TextEditingController();
+  final FocusNode _pwdFocusNode = FocusNode();
+  bool _pwdInputVisible = false;
+
   String selectedConnectionType = 'Connect';
 
   bool isWindowMinimized = false;
@@ -221,6 +227,9 @@ class _ConnectionPageState extends State<ConnectionPage>
     super.initState();
     _allPeersLoader.init(setState);
     _idFocusNode.addListener(onFocusChanged);
+    // 2026-11-13: 读取编译期嵌入的「允许使用临时密码连接」开关
+    _pwdInputVisible =
+        bind.mainGetLocalOption(key: _kOptionAllowTempPassword) == 'Y';
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final lastRemoteId = await bind.mainGetLastRemoteId();
@@ -244,6 +253,8 @@ class _ConnectionPageState extends State<ConnectionPage>
     _idFocusNode.removeListener(onFocusChanged);
     _idFocusNode.dispose();
     _idEditingController.dispose();
+    _pwdEditingController.dispose();
+    _pwdFocusNode.dispose();
     if (Get.isRegistered<IDTextEditingController>()) {
       Get.delete<IDTextEditingController>();
     }
@@ -333,11 +344,17 @@ class _ConnectionPageState extends State<ConnectionPage>
       bool isTerminal = false,
       bool isTcpTunneling = false}) {
     var id = _idController.id;
+    // 2026-11-13: 临时密码输入框有值时随本次连接传入（临时密码/固定密码均可）；
+    // 留空则走原有流程（记住的密码或弹窗输入），不影响固定密码连接
+    final password = _pwdInputVisible && _pwdEditingController.text.isNotEmpty
+        ? _pwdEditingController.text
+        : null;
     connect(context, id,
         isFileTransfer: isFileTransfer,
         isViewCamera: isViewCamera,
         isTerminal: isTerminal,
-        isTcpTunneling: isTcpTunneling);
+        isTcpTunneling: isTcpTunneling,
+        password: password);
   }
 
   /// UI for the remote ID TextField.
@@ -518,6 +535,32 @@ class _ConnectionPageState extends State<ConnectionPage>
             Padding(
               padding: const EdgeInsets.only(top: 13.0),
               child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                if (_pwdInputVisible)
+                  Expanded(
+                    child: TextField(
+                      controller: _pwdEditingController,
+                      focusNode: _pwdFocusNode,
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      keyboardType: TextInputType.visiblePassword,
+                      maxLines: 1,
+                      style: const TextStyle(fontSize: 18, height: 1.4),
+                      cursorColor:
+                          Theme.of(context).textTheme.titleLarge?.color,
+                      decoration: InputDecoration(
+                          filled: false,
+                          counterText: '',
+                          isDense: true,
+                          hintText: translate('临时密码'),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 15, vertical: 10)),
+                      onSubmitted: (_) {
+                        onConnect();
+                      },
+                    ),
+                  ),
+                if (_pwdInputVisible) const SizedBox(width: 8),
                 SizedBox(
                   height: 28.0,
                   child: ElevatedButton(
