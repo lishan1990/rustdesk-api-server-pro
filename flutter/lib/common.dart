@@ -2594,7 +2594,9 @@ connect(BuildContext context, String id,
   }
   id = id.replaceAll(' ', '');
   // 2026-11-13: 禁止连接本机（自连会造成连接管理窗风暴），所有入口统一拦截
-  if (id == bind.mainGetMyId()) {
+  // 注意 mainGetMyId() 返回 Future<String>，必须 await 后再比较
+  final myId = await bind.mainGetMyId();
+  if (id == myId) {
     if (isDesktop && desktopType != DesktopType.main) return;
     msgBoxCommon(
         gFFI.dialogManager,
