@@ -940,7 +940,10 @@ jobs:
   build-rustdesk-ios:
     name: build rustdesk ios ipa
     if: ${{ inputs.target == 'ios' || inputs.target == 'all' }}
-    runs-on: macos-14
+    # 2026-11-14: macos-14 的 runner 配置已被 GitHub 停用
+    # （annotation: "The configuration 'macos-14-arm64-us-default' is not supported"），
+    # 会导致 job 在分配 runner 前被直接 cancelled。改用官方 RustDesk 同款 macos-latest。
+    runs-on: macos-latest
     timeout-minutes: 180
     needs: [generate-bridge]
     steps:
