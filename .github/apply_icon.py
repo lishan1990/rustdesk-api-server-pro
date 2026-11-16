@@ -69,7 +69,7 @@ for f in glob.glob('flutter/android/app/src/main/res/mipmap-anydpi-v26/*.xml'):
 # 3) iOS AppIcon.appiconset (sizes parsed from filenames)
 adir = 'flutter/ios/Runner/Assets.xcassets/AppIcon.appiconset'
 for f in glob.glob(adir + '/Icon-App-*.png'):
-    mm = re.search(r'Icon-App-(\d+(?:\.\d+)?)x(\d+)@(\d+)x\.png$', os.path.basename(f))
+    mm = re.search(r'Icon-App-(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)@(\d+)x\.png$', os.path.basename(f))
     if not mm:
         continue
     size = int(round(float(mm.group(1)) * int(mm.group(3))))
