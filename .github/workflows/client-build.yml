@@ -132,7 +132,6 @@ jobs:
           python3 .github/apply_icon.py /tmp/custom-icon.png
 
       - name: Apply screenwall source patch
-        if: ${{ inputs.screenwall == true }}
         shell: bash
         run: |
           python3 .github/apply_screenwall.py
