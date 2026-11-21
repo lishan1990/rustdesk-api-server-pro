@@ -20,10 +20,6 @@ on:
         type: string
         description: "自定义应用图标下载地址（PNG/JPEG/WebP，可空=默认图标）"
         default: ""
-      screenwall:
-        type: boolean
-        description: "生成屏幕墙专用构建（管理员监控墙，N宫格多画面）"
-        default: false
 
 env:
   SCITER_RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503, also 1.78 has ABI change which causes our sciter version not working, https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
@@ -67,7 +63,6 @@ env:
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
   # 自定义应用图标：面板已上传并生成免登录下载地址，构建前由各 job 下载并替换三平台图标
   ICON_URL: "${{ inputs.icon-url }}"
-  SCREENWALL: "${{ inputs.screenwall }}"
 
 jobs:
   generate-bridge:
@@ -130,12 +125,6 @@ jobs:
           curl -fsSL --max-time 90 -o /tmp/custom-icon.png "$ICON_URL" || { echo "::warning::custom icon download failed, keep default icons"; exit 0; }
           python3 -m pip install --quiet pillow || python3 -m pip install --quiet --user pillow || pip3 install --quiet pillow || true
           python3 .github/apply_icon.py /tmp/custom-icon.png
-
-      - name: Apply screenwall source patch
-        shell: bash
-        run: |
-          python3 .github/apply_screenwall.py
-          grep -n "screenwall" flutter/lib/main.dart | head -5
 
       - name: Write embedded custom config
         shell: bash
